@@ -1,6 +1,6 @@
 # AfricaRice Quality Assessor (Edge ML)
 
-An offline-first Flutter application built for the Zindi AfricaRice Quality Assessment Challenge. This app runs a native, INT8-quantized ConvNeXt-Small computer vision model directly on edge devices (Android/iOS) using ONNX Runtime Mobile and XNNPACK acceleration.
+An offline-first Flutter application built for the Zindi AfricaRice Quality Assessment Challenge. This app runs a native, INT8-quantized ConvNeXt-Small computer vision model directly on edge devices (Android) using ONNX Runtime Mobile and XNNPACK acceleration.
 
 ## 🚀 Key Features
 * **Fully Offline Inference:** No cloud APIs. 100% of the ML processing happens on-device.
@@ -23,8 +23,6 @@ An offline-first Flutter application built for the Zindi AfricaRice Quality Asse
   * `export_screen.dart`: SQLite to CSV generation.
 * `/assets/`
   * `convnext_3x4_int8.onnx`: The quantized model weights.
-* `/python_scripts/`
-  * `benchmark.py`: Scripts used to verify ONNX tensor outputs against Python baselines.
 
 ## ⚙️ How to Build and Run
 1. Ensure Flutter is installed (v3.10+ recommended).
