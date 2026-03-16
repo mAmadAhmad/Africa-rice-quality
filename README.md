@@ -1,35 +1,106 @@
-# AfricaRice Quality Assessor (Edge ML)
+# AfricaRice Quality Assessor
 
-An offline-first Flutter application built for the Zindi AfricaRice Quality Assessment Challenge. This app runs a native, INT8-quantized ConvNeXt-Small computer vision model directly on edge devices (Android) using ONNX Runtime Mobile and XNNPACK acceleration.
+A fully offline Android app that runs rice quality assessment using a fine-tuned ConvNeXt-Small model — entirely on-device. Built for the [Zindi AfricaRice Quality Assessment Challenge](https://zindi.africa), where the core requirement was a working field tool for agronomists in areas without reliable internet.
 
-## 🚀 Key Features
-* **Fully Offline Inference:** No cloud APIs. 100% of the ML processing happens on-device.
-* **Smart Image Validation:** Pre-inference checks for pixel luminance (darkness) and Laplacian variance (motion blur) to save compute.
-* **Dynamic Tensor Routing:** Dynamically adjusts the one-hot metadata tensor `[Paddy, White, Brown]` based on user selection to correctly condition the model's multi-scale decoder.
-* **12-Tile Grid Processing:** Slices 4K camera input into a 3x4 non-overlapping grid to manage mobile RAM constraints while matching the model's native training resolution.
-* **Field-Ready Export:** Generates detailed CSV reports including 9 grain counts, 6 measurement metrics, and GPS coordinates for agronomist traceability.
+**Final standing: 22nd out of 50 teams/individuals — public score 0.755 · [competition leaderboard](https://zindi.africa/competitions/unido-africarice-app-builder-challenge/leaderboard)**
+---
 
-## 🛠️ Tech Stack
-* **Frontend:** Flutter / Dart
-* **Inference Engine:** ONNX Runtime Mobile (C++ backend via FFI)
-* **Local Storage:** SQLite (`sqflite`)
-* **Hardware Interfacing:** `camera`, `geolocator`
+## What it does
 
-## 📂 Project Structure
-* `/lib/`
-  * `camera_screen.dart`: UI for capture, GPS fetching, and Rice Type selection.
-  * `inference_service.dart`: Background Isolate running the ONNX model.
-  * `rice_logic.dart`: Post-processing, thresholding, and grading logic.
-  * `export_screen.dart`: SQLite to CSV generation.
-* `/assets/`
-  * `convnext_3x4_int8.onnx`: The quantized model weights.
+You point your phone camera at a tray of rice grains, press capture, and ~32 seconds later get:
 
-## ⚙️ How to Build and Run
-1. Ensure Flutter is installed (v3.10+ recommended).
-2. Clone the repository.
-3. Run `flutter pub get` to install dependencies.
-4. Ensure an Android device or emulator is connected.
-5. Run `flutter run --release` (Note: Inference runs significantly faster in release mode due to Dart AOT compilation and XNNPACK threading).
+- Total grain count with broken/long/medium breakdown
+- Milling grade (Premium → Grade 3 based on broken %)
+- Kernel dimensions (avg length, width, L/W ratio)
+- Defect flags — chalky, black, red, yellow, green grain counts
+- CIELAB colour profile (L\*, a\*, b\*)
+- Optional GPS coordinates attached to the scan
 
-## 🧠 Model Architecture Note
-The underlying model utilizes a multi-scale CSR Decoder. To prevent the mobile device from running out of memory on 12-megapixel camera images, the `inference_service.dart` handles inline nearest-neighbor resizing, converting image blocks directly into `[1, 1, 3, 512, 512]` `Float32List` buffers without instantiating intermediate objects in memory.
+Everything runs offline. No API calls, no cloud inference, no internet required.
+
+---
+
+## The ML side
+
+The model is a ConvNeXt-Small backbone with 9 independent MultiScale CSR density heads (one per grain category) and a regression head for morphological measurements.
+
+The original model was trained on a 6×8 tile grid (48 tiles per image), which gave good accuracy but took ~216 seconds on a mid-range phone — way over the 60-second field usability target. I fine-tuned it down to a 3×4 grid (12 tiles) using a two-phase gradual unfreezing strategy:
+
+1. Freeze the backbone, train only the density heads for 7 epochs so they recalibrate to the new tile scale without corrupting the pretrained features
+2. Unfreeze the full model at 10× lower LR for end-to-end refinement
+
+This got the inference time down to ~32 seconds while keeping accuracy in a usable range. The model is then exported to ONNX and quantized to INT8, bringing it from 218MB to 55.6MB.
+
+**Final validation MAE: ~17.9 grains across 9 categories**
+
+---
+
+## Why it's fast on mobile
+
+A few things that made a real difference:
+
+**XNNPACK** — enables multi-threaded CPU execution via ONNX Runtime's execution provider. Cuts per-tile latency roughly in half on Snapdragon devices (~2.2s vs ~4.3s per tile).
+
+**LUT normalisation** — instead of computing `(pixel / 255.0 - mean) / std` per pixel, I pre-compute all 256 possible values for each channel into lookup tables at isolate startup. Makes normalising 786,432 values per tile much faster.
+
+**Inline nearest-neighbour resize** — tile extraction resizes each block directly into the `Float32List` tensor buffer by sampling the raw RGBA bytes with integer scaling arithmetic. No intermediate `Image` object is allocated per tile — zero heap pressure in the inference loop.
+
+**Background isolate** — the entire ONNX session lives in a Dart isolate spawned at app launch, pre-warmed before the user reaches the camera. The main thread stays unblocked so the progress bar and UI remain responsive during inference.
+
+---
+
+## Tech stack
+
+- **Flutter / Dart** — frontend and isolate architecture
+- **ONNX Runtime Mobile** — C++ inference backend via FFI
+- **XNNPACK** — multi-threaded CPU execution provider
+- **SQLite (sqflite)** — local scan history
+- **Geolocator** — optional field GPS tagging
+- **Python / PyTorch / timm** — model training and fine-tuning (code not included here)
+
+---
+
+## Project structure
+
+```
+lib/
+├── main.dart                 # App entry, isolate warm-up, routing
+├── inference_service.dart    # Background isolate, tile loop, ONNX session
+├── rice_logic.dart           # Grading thresholds, percentage calculations
+├── camera_screen.dart        # Capture, GPS fetch, rice type selection
+├── results_screen.dart       # Full metrics display
+├── history_screen.dart       # SQLite scan history list
+├── export_screen.dart        # CSV generation and share sheet
+├── database_helper.dart      # SQLite schema and queries
+├── home_screen.dart          # Dashboard and capture guidelines
+├── profile_screen.dart       # User preferences and GPS opt-in
+├── signup_screen.dart        # First-launch onboarding
+├── disclaimer_screen.dart    # IP disclaimer (UNIDO / AfricaRice)
+└── app_info_screen.dart      # Model version and data policy
+
+assets/
+└── convnext_3x4_int8.onnx    # INT8 quantized model (55.6 MB)
+```
+
+---
+
+## Running it
+
+```bash
+git clone <repo>
+cd rice_quality_app
+flutter pub get
+flutter run --release
+```
+
+Use `--release` — inference runs noticeably faster with Dart AOT compilation and ONNX Runtime release optimisations enabled.
+
+Tested on Samsung Galaxy A52 (Snapdragon 720G, Android 14).
+
+---
+
+## Notes
+
+The model IP is co-owned by UNIDO and AfricaRice per competition guidelines. The app is built entirely on open-source tools and is intended for non-commercial field assessment use.
+
+Medium grain count (`Medium_Count`) consistently predicts near zero — this is a data issue, not a model bug. The training distribution is ~80% zero for this category, so the model learns that predicting zero minimises loss. Garbage in, garbage out.
