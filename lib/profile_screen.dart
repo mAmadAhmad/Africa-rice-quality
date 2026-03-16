@@ -12,7 +12,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final _nameController = TextEditingController();
   final _roleController = TextEditingController();
-  final _orgController = TextEditingController();
+  final _orgController  = TextEditingController();
   bool _enableGps = false;
   bool _isLoading = true;
 
@@ -27,38 +27,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       _nameController.text = prefs.getString('user_name') ?? '';
       _roleController.text = prefs.getString('user_role') ?? '';
-      _orgController.text = prefs.getString('user_org') ?? '';
-      _enableGps = prefs.getBool('enable_gps') ?? false; // LOAD GPS STATE!
-      _isLoading = false;
+      _orgController.text  = prefs.getString('user_org')  ?? '';
+      _enableGps  = prefs.getBool('enable_gps') ?? false;
+      _isLoading  = false;
     });
   }
 
   Future<void> _saveProfile() async {
     if (_nameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Name is required"), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Name is required"),
+        backgroundColor: Colors.red,
+      ));
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user_name', _nameController.text.trim());
     await prefs.setString('user_role', _roleController.text.trim());
-    await prefs.setString('user_org', _orgController.text.trim());
-    await prefs.setBool('enable_gps', _enableGps); // SAVE GPS STATE!
+    await prefs.setString('user_org',  _orgController.text.trim());
+    await prefs.setBool('enable_gps',  _enableGps);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Profile updated successfully!"), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Profile updated successfully!"),
+        backgroundColor: Colors.green,
+      ));
       FocusScope.of(context).unfocus();
     }
   }
 
+  // Mirrors the permission flow in SignUpScreen — permission is requested
+  // in context when the user intentionally enables GPS, not at app launch.
   Future<void> _toggleGps(bool value) async {
     if (value) {
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("GPS Permission Denied")));
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("GPS permission denied.")),
+          );
+        }
         return;
       }
     }
@@ -74,13 +87,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
       children: [
         const Icon(Icons.account_circle, size: 80, color: Colors.green),
         const SizedBox(height: 24),
-        TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'Name / Username *', border: OutlineInputBorder())),
+        TextField(
+          controller: _nameController,
+          decoration: const InputDecoration(
+              labelText: 'Name / Username *',
+              border: OutlineInputBorder()),
+        ),
         const SizedBox(height: 16),
-        TextField(controller: _roleController, decoration: const InputDecoration(labelText: 'Role (Optional)', border: OutlineInputBorder())),
+        TextField(
+          controller: _roleController,
+          decoration: const InputDecoration(
+              labelText: 'Role (Optional)',
+              border: OutlineInputBorder()),
+        ),
         const SizedBox(height: 16),
-        TextField(controller: _orgController, decoration: const InputDecoration(labelText: 'Organisation (Optional)', border: OutlineInputBorder())),
+        TextField(
+          controller: _orgController,
+          decoration: const InputDecoration(
+              labelText: 'Organisation (Optional)',
+              border: OutlineInputBorder()),
+        ),
         const SizedBox(height: 16),
-        
         SwitchListTile(
           title: const Text("Save GPS Location"),
           subtitle: const Text("Attach coordinates to history."),
@@ -88,13 +115,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           activeColor: Colors.green,
           onChanged: _toggleGps,
         ),
-        
         const SizedBox(height: 32),
         ElevatedButton(
-          style: ElevatedButton.styleFrom(padding: const EdgeInsets.all(16), backgroundColor: Colors.green, foregroundColor: Colors.white),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.all(16),
+            backgroundColor: Colors.green,
+            foregroundColor: Colors.white,
+          ),
           onPressed: _saveProfile,
-          child: const Text('Save Changes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        )
+          child: const Text('Save Changes',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        ),
       ],
     );
   }

@@ -21,14 +21,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   void _refreshHistory() {
-    setState(() {
-      _scanHistory = DatabaseHelper.instance.readAllScans();
-    });
+    setState(() => _scanHistory = DatabaseHelper.instance.readAllScans());
   }
 
   String _formatDate(String isoDate) {
     final date = DateTime.parse(isoDate);
-    return "${date.day}/${date.month}/${date.year} at ${date.hour}:${date.minute.toString().padLeft(2, '0')}";
+    return "${date.day}/${date.month}/${date.year} "
+           "at ${date.hour}:${date.minute.toString().padLeft(2, '0')}";
   }
 
   @override
@@ -40,8 +39,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
-          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text("No scans yet. Take a photo!", style: TextStyle(fontSize: 18)));
+          }
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(
+              child: Text("No scans yet. Take a photo!",
+                  style: TextStyle(fontSize: 18)),
+            );
           }
 
           final scans = snapshot.data!;
@@ -57,11 +60,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
                   onTap: () {
-                    // Rebuild the map from JSON and push to ResultsScreen!
-                    final Map<String, dynamic> fullData = jsonDecode(scan['full_json']);
-                    Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => ResultsScreen(data: fullData, imagePath: scan['image_path'])
-                    ));
+                    // Decode the full JSON blob stored at write time so the
+                    // ResultsScreen receives every inference field without
+                    // requiring additional database queries.
+                    final Map<String, dynamic> fullData =
+                        jsonDecode(scan['full_json']);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ResultsScreen(
+                          data: fullData,
+                          imagePath: scan['image_path'],
+                        ),
+                      ),
+                    );
                   },
                   child: ListTile(
                     contentPadding: const EdgeInsets.all(12),
@@ -72,23 +84,32 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         width: 60,
                         height: 60,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, size: 60), 
+                        // Gracefully handle images deleted from device storage.
+                        errorBuilder: (_, __, ___) =>
+                            const Icon(Icons.broken_image, size: 60),
                       ),
                     ),
                     title: Text(
-                      "${scan['grade']} | ${scan['shape']}", 
-                      style: const TextStyle(fontWeight: FontWeight.bold)
+                      "${scan['grade']} | ${scan['shape']}",
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SizedBox(height: 4),
-                        Text("Total: ${scan['total_count']} (${scan['broken_pct']}% Broken)"),
+                        Text(
+                            "Total: ${scan['total_count']} "
+                            "(${scan['broken_pct']}% Broken)"),
                         const SizedBox(height: 4),
-                        Text(_formatDate(scan['timestamp']), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                        Text(
+                          _formatDate(scan['timestamp']),
+                          style: const TextStyle(
+                              color: Colors.grey, fontSize: 12),
+                        ),
                       ],
                     ),
-                    trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                    trailing:
+                        const Icon(Icons.chevron_right, color: Colors.grey),
                   ),
                 ),
               );

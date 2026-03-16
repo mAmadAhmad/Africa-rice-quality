@@ -21,20 +21,23 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _isCameraInitialized = false;
   bool _isAnalyzing = false;
   String? _capturedImagePath;
-  String? _pendingImagePath;
+  String? _pendingImagePath; // Holds the path while in Accept/Retake preview mode
 
   bool _showGuidance = true;
   int _currentTile = 0;
-  int _totalTiles = 12;
+  int _totalTiles  = 12;
 
-  // ── NEW: State for Rice Type ──
-  String _selectedRiceType = 'White'; 
+  // Rice type selected by the user in the preview UI.
+  // Passed to InferenceService to set the model's one-hot meta tensor and
+  // apply the correct post-processing zeroing rules for the selected variety.
+  String _selectedRiceType = 'White';
 
-  // ── GPS ──
-  bool _gpsEnabled = false;   
-  double? _pendingLat;        
+  // GPS — fetched on the main thread at capture time (not inside the isolate).
+  // Using LocationAccuracy.low (cell tower) for ~1s lock with no satellite wait.
+  bool _gpsEnabled  = false;
+  double? _pendingLat;
   double? _pendingLon;
-  String _gpsStatus = '';     
+  String _gpsStatus = ''; // '', 'fetching', 'locked', 'unavailable'
 
   final ImagePicker _picker = ImagePicker();
 
@@ -44,6 +47,7 @@ class _CameraScreenState extends State<CameraScreen> {
     _initCamera();
     _loadGpsPreference();
 
+    // Auto-hide the guidance banner after 6 seconds.
     Future.delayed(const Duration(seconds: 6), () {
       if (mounted) setState(() => _showGuidance = false);
     });
@@ -58,6 +62,9 @@ class _CameraScreenState extends State<CameraScreen> {
     final cameras = await availableCameras();
     if (cameras.isEmpty) return;
 
+    // ResolutionPreset.max captures at the sensor's native resolution.
+    // The inference worker caps input at 4000px wide, so high-res captures
+    // benefit grain density estimation without unbounded memory use.
     _controller = CameraController(
       cameras.first,
       ResolutionPreset.max,
@@ -85,11 +92,13 @@ class _CameraScreenState extends State<CameraScreen> {
     _controller!.setFocusPoint(offset);
   }
 
+  // Fetches GPS on the main thread immediately at capture time.
+  // Hard 4-second timeout prevents this from blocking the user.
+  // Silently skipped if the user has not opted in or permission is denied.
   Future<void> _fetchGpsIfEnabled() async {
     if (!_gpsEnabled) return;
 
     setState(() => _gpsStatus = 'fetching');
-
     try {
       final permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied ||
@@ -115,33 +124,29 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Future<void> _pickImage() async {
     if (_isAnalyzing) return;
-    try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-      if (image == null) return;
-      await _fetchGpsIfEnabled();
-      setState(() => _pendingImagePath = image.path);
-    } catch (e) {
-      print("❌ Gallery Error: $e");
-    }
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image == null) return;
+    await _fetchGpsIfEnabled();
+    setState(() => _pendingImagePath = image.path);
   }
 
   Future<void> _takePicture() async {
     if (!_controller!.value.isInitialized ||
         _controller!.value.isTakingPicture ||
         _isAnalyzing) return;
-    try {
-      final results = await Future.wait([
-        _controller!.takePicture(),
-        _fetchGpsIfEnabled().then((_) => null),
-      ]);
-      final XFile photo = results[0] as XFile;
-      setState(() => _pendingImagePath = photo.path);
-    } catch (e) {
-      print("❌ Camera Error: $e");
-    }
+
+    // Photo capture and GPS fetch run concurrently — zero added wait time for GPS.
+    final results = await Future.wait([
+      _controller!.takePicture(),
+      _fetchGpsIfEnabled().then((_) => null),
+    ]);
+    final XFile photo = results[0] as XFile;
+    setState(() => _pendingImagePath = photo.path);
   }
 
   Future<void> _processImage(String imagePath) async {
+    // Snapshot GPS coordinates at the moment the user taps Accept,
+    // then clear pending values before the async inference begins.
     final double? lat = _pendingLat;
     final double? lon = _pendingLon;
 
@@ -149,22 +154,19 @@ class _CameraScreenState extends State<CameraScreen> {
       _capturedImagePath = imagePath;
       _isAnalyzing = true;
       _currentTile = 0;
-      _gpsStatus = '';
-      _pendingLat = null;
-      _pendingLon = null;
+      _gpsStatus   = '';
+      _pendingLat  = null;
+      _pendingLon  = null;
     });
 
     try {
-      final inferenceService = InferenceService();
-      
-      // ── CHANGED: Passed _selectedRiceType here ──
-      final rawData = await inferenceService.analyzeImage(
+      final rawData = await InferenceService().analyzeImage(
         imagePath,
-        riceType: _selectedRiceType, 
+        riceType: _selectedRiceType,
         onProgress: (current, total) {
           if (mounted) setState(() {
             _currentTile = current;
-            _totalTiles = total;
+            _totalTiles  = total;
           });
         },
       );
@@ -176,13 +178,15 @@ class _CameraScreenState extends State<CameraScreen> {
 
       final processedData = RiceLogic.interpretResults(rawData);
 
+      // Merge raw ML outputs, derived quality metrics, and optional metadata
+      // into a single flat map for database storage and the results screen.
       final Map<String, dynamic> dataToSave = {
         ...rawData,
         ...processedData,
-        'latitude':  lat,
-        'longitude': lon,
-        'has_gps':   lat != null && lon != null,
-        'sample_type': _selectedRiceType, // Save type to DB!
+        'latitude':    lat,
+        'longitude':   lon,
+        'has_gps':     lat != null && lon != null,
+        'sample_type': _selectedRiceType,
       };
 
       await DatabaseHelper.instance.create(dataToSave, imagePath);
@@ -248,7 +252,7 @@ class _CameraScreenState extends State<CameraScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (_) => ResultsScreen(
-                        data: dataToSave, 
+                        data: dataToSave,
                         imagePath: imagePath,
                       ),
                     ),
@@ -274,7 +278,8 @@ class _CameraScreenState extends State<CameraScreen> {
     } catch (e) {
       if (mounted) {
         _showValidationWarning(
-          "Analysis could not complete.\n\nThe image may be corrupted, or your device may be low on memory.",
+          "Analysis could not complete.\n\nThe image may be corrupted, "
+          "or your device may be low on memory.",
         );
       }
     } finally {
@@ -321,6 +326,7 @@ class _CameraScreenState extends State<CameraScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
+          // Camera live preview / captured image / accept preview
           LayoutBuilder(
             builder: (context, constraints) {
               return GestureDetector(
@@ -338,8 +344,11 @@ class _CameraScreenState extends State<CameraScreen> {
             },
           ),
 
+          // Capture guidance banner — auto-hides after 6 seconds
           AnimatedOpacity(
-            opacity: _showGuidance && !_isAnalyzing && _capturedImagePath == null ? 1.0 : 0.0,
+            opacity: _showGuidance && !_isAnalyzing && _capturedImagePath == null
+                ? 1.0
+                : 0.0,
             duration: const Duration(milliseconds: 500),
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -353,17 +362,18 @@ class _CameraScreenState extends State<CameraScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildGuideRow(Icons.color_lens, Colors.blueAccent, "Use a solid BLUE background"),
+                    _buildGuideRow(Icons.color_lens,         Colors.blueAccent, "Use a solid BLUE background"),
                     const SizedBox(height: 6),
-                    _buildGuideRow(Icons.layers_clear, Colors.amber, "Spread grains in a SINGLE layer"),
+                    _buildGuideRow(Icons.layers_clear,        Colors.amber,      "Spread grains in a SINGLE layer"),
                     const SizedBox(height: 6),
-                    _buildGuideRow(Icons.center_focus_strong, Colors.white, "Avoid blur & darkness"),
+                    _buildGuideRow(Icons.center_focus_strong, Colors.white,      "Avoid blur & darkness"),
                   ],
                 ),
               ),
             ),
           ),
 
+          // Full-screen overlay shown during the ~32-second inference window
           if (_isAnalyzing)
             Container(
               color: Colors.black87,
@@ -418,6 +428,7 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  // GPS status badge shown in the AppBar when GPS is enabled in Profile settings.
   Widget _buildGpsStatusBadge() {
     switch (_gpsStatus) {
       case 'fetching':
@@ -449,15 +460,15 @@ class _CameraScreenState extends State<CameraScreen> {
   Widget? _buildFloatingActionButtons() {
     if (_isAnalyzing) return null;
 
-    // PREVIEW MODE — Accept / Retake
+    // PREVIEW MODE — user reviews the captured frame before committing to inference
     if (_pendingImagePath != null) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 20.0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            
-            // ── NEW: Rice Type Dropdown Selector ──
+            // Rice type selector — shown in preview so the user confirms variety
+            // before inference starts. Selection updates the model's meta tensor.
             Container(
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -471,7 +482,11 @@ class _CameraScreenState extends State<CameraScreen> {
                   value: _selectedRiceType,
                   dropdownColor: Colors.black87,
                   icon: const Icon(Icons.arrow_drop_down, color: Colors.green),
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                   items: ['Paddy', 'White', 'Brown'].map((String value) {
                     return DropdownMenuItem<String>(
                       value: value,
@@ -479,14 +494,13 @@ class _CameraScreenState extends State<CameraScreen> {
                     );
                   }).toList(),
                   onChanged: (String? newValue) {
-                    if (newValue != null) {
-                      setState(() => _selectedRiceType = newValue);
-                    }
+                    if (newValue != null) setState(() => _selectedRiceType = newValue);
                   },
                 ),
               ),
             ),
 
+            // GPS location chip — shown when GPS is enabled and a status is available
             if (_gpsEnabled && _gpsStatus.isNotEmpty)
               Container(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -545,9 +559,9 @@ class _CameraScreenState extends State<CameraScreen> {
                   heroTag: "retake_btn",
                   onPressed: () => setState(() {
                     _pendingImagePath = null;
-                    _pendingLat = null;
-                    _pendingLon = null;
-                    _gpsStatus = '';
+                    _pendingLat  = null;
+                    _pendingLon  = null;
+                    _gpsStatus   = '';
                   }),
                   backgroundColor: Colors.redAccent,
                   child: const Icon(Icons.close, color: Colors.white, size: 40),
@@ -569,7 +583,7 @@ class _CameraScreenState extends State<CameraScreen> {
       );
     }
 
-    // CAMERA MODE — Shoot / Gallery
+    // CAMERA MODE — live viewfinder with capture and gallery buttons
     if (_capturedImagePath == null) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 20.0),
