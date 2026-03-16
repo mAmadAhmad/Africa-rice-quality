@@ -87,7 +87,7 @@ assets/
 ## Running it
 
 ```bash
-git clone <repo>
+git clone https://github.com/mAmadAhmad/Africa-rice-quality.git
 cd rice_quality_app
 flutter pub get
 flutter run --release
