@@ -20,9 +20,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _refreshHistory();
   }
 
-  void _refreshHistory() {
-    setState(() => _scanHistory = DatabaseHelper.instance.readAllScans());
-  }
+ void _refreshHistory() {
+  setState(() { _scanHistory = DatabaseHelper.instance.readAllScans(); });
+}
 
   String _formatDate(String isoDate) {
     final date = DateTime.parse(isoDate);
